@@ -1,0 +1,1552 @@
+---
+title: "Circulation Statistics"
+author: "Emma Baillie"
+date: "10/05/2021"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(fig.width=8, fig.height=3.8)
+```
+
+```{r init, warning=FALSE, message=FALSE}
+library("readxl")
+library("dplyr")
+library("tidyverse")
+library("tidyr")
+library("np")
+library("mgcv")
+library("zoo")
+library("gridExtra")
+library("np")
+
+#uscom
+uscom <- read_excel("RawData.xlsx",sheet="Uscom",range="A3:X3255")
+uscom_names <- read_excel("RawData.xlsx",sheet="Uscom",n_max=1)
+names(uscom) <- names(uscom_names)
+names(uscom)[4] <- "Names2"
+
+#flotrac
+
+flotrac <- read_excel("RawDataFlotrac.xlsx",range="A3:BS801")
+flotrac_names <- read_excel("RawDataFlotrac.xlsx",n_max=1)
+names(flotrac) <- names(flotrac_names)
+flotrac_withnulls<- flotrac %>% select(c(6,9,15,25,26,27,28,29,31,32,35,41,42,43,48))
+names(flotrac_withnulls) <- c("Age","Gender","Cfailure","BMI","BSA","Weight","Height","Cardiac_Output","Stroke_Volume","HR","SVR","Mean_AP","CVP","PulsePressure","Es")
+flotrac_withnulls$AgeGroup <- cut(flotrac_withnulls$Age,breaks=c(seq(0,100,by=5),Inf),right=FALSE)
+flotrac_withnulls$AgeGroup10 <- cut(flotrac_withnulls$Age,breaks=c(seq(0,100,by=10),Inf),right=FALSE)
+flotrac_withnulls$WeightGroup10 <- cut(flotrac_withnulls$Weight,breaks=c(seq(0,100,by=10),Inf),right=FALSE)
+flotrac_withnulls$BMIGroup <- cut(flotrac_withnulls$BMI,breaks=c(0,18.5,25,30,Inf),right=FALSE)
+flotrac_withnulls$SV_per_kg <- flotrac_withnulls$Stroke_Volume/flotrac_withnulls$Weight
+flotrac_withnulls$CO_per_kg <- flotrac_withnulls$Cardiac_Output/flotrac_withnulls$Weight
+
+#make flotrac comparable with uscom and add other useful columns
+flotrac_withnulls <- flotrac_withnulls %>% mutate(Gender = recode(Gender, 'M' = 'Male', 'F' = 'Female'))
+flotrac_withnulls$Height <- flotrac_withnulls$Height*100
+flotrac_withnulls$Ea <- flotrac_withnulls$Es + flotrac_withnulls$CVP/flotrac_withnulls$Stroke_Volume
+
+flotrac_withnulls$Gender <- factor(flotrac_withnulls$Gender)
+flotrac_nonulls<- flotrac_withnulls %>% drop_na(c(Age,Gender,Weight,Height,Cardiac_Output,Stroke_Volume,HR,SVR,Mean_AP,CVP,PulsePressure,Es)) 
+
+
+#uscom
+uscom_nonulls<- uscom %>% drop_na(c(5:24))
+uscom_nonulls$TPR <- uscom_nonulls$Ea*80/uscom_nonulls$HR
+uscom_nonulls$AgeGroup <- cut(uscom_nonulls$Age,breaks=c(seq(0,100,by=5),Inf),right=FALSE)
+uscom_nonulls$AgeGroup10 <- cut(uscom_nonulls$Age,breaks=c(seq(0,100,by=10),Inf),right=FALSE)
+uscom_nonulls$WeightGroup10 <- cut(uscom_nonulls$Weight,breaks=c(seq(0,100,by=10),Inf),right=FALSE)
+uscom_nonulls$BMIGroup <- cut(uscom_nonulls$BMI,breaks=c(0,18.5,25,30,Inf),right=FALSE)
+uscom_nonulls$Gender <- factor(uscom_nonulls$Gender)
+names(uscom_nonulls)[16] <- c("SV_per_kg")
+uscom_nonulls$CO_per_kg <- uscom_nonulls$Cardiac_Output/uscom_nonulls$Weight
+
+#combined data - flotrac and uscom >40
+
+combined_f <-flotrac_nonulls %>% select(Age,Gender,BMI,BSA,Weight,Height,Cardiac_Output,Stroke_Volume,HR,Mean_AP,SVR,SV_per_kg,CO_per_kg,Ea)%>% filter(Age>40)
+combined_f$set <-"flotrac"
+
+combined_u <-uscom_nonulls %>% select(Age,Gender,BMI,BSA,Weight,Height,Cardiac_Output,Stroke_Volume,HR,Mean_AP,SVR,SV_per_kg,CO_per_kg,Ea) %>% filter(Age>40)
+combined_u$set <- "uscom"
+
+combined <- rbind(combined_f,combined_u)
+
+#general parameters
+m_colors= c("#dd6666", "#6666dd")
+
+
+```
+# Results of initial data read, criteria for removing entries given:
+
+### flotrac 
+
+Removed entries with null data for Age,Gender,Weight,Height,Cardiac_Output,Stroke_Volume,HR,SVR,Mean_AP,CVP,PulsePressure,Es
+
+Correpondence with Excel sheet data columns:
+
+Age - Age (F)
+Gender - Gender (I)
+Cfailure - Cardiac Failure(O)
+BMI - BMI (Y)
+BSA - BSA (Z)
+Weight - Weight (AA)
+Height - Height (AB)
+Cardiac_Output - Cardiac_Output (AC)
+Stroke_Volume - Stroke_Volume (AE)
+HR - Heart_rate (AF) 
+SVR - Systemic_Vascular_Resistance (AI)
+Mean_AP - Mean_Arterial_Pressure (AO) 
+CVP - Central_venous_pressure (AP)
+PulsePressure - Pulse_Pressure (AQ)
+Es - Elastance (AV)
+
+
+### uscom 
+
+Removed entries with any null data (except in name columns)
+```{r}
+#n values for two data sets
+dim(uscom_nonulls)
+summary(select(uscom_nonulls,c(Age,Gender,Height,Weight,Cardiac_Output,HR,Stroke_Volume,SV_per_kg,Mean_AP,Pulse_Pressure,Ea,SVR,TPR)))
+dim(flotrac_nonulls)
+summary(select(flotrac_nonulls,c(Age,Gender,Height,Weight,Cardiac_Output,HR,Stroke_Volume,SV_per_kg,SVR,Mean_AP,CVP,PulsePressure,Es)))
+
+
+```
+Notes: 2866 USCOM data points and 560 Flotrac data points used in the graphs and statistics in this document
+
+# USCOM Data investigation
+
+### Initial cardiac plots
+Actual data for significant cardiac variables. Shows dispersion and general pattern of actual data, and areas of high data collection (paediatric)
+
+
+
+```{r cardiac_plots_uscom, fig.height=5}
+
+m_dot_color= c("#555555")
+m_size=0.5
+m_alpha=0.4
+ p_HR <- ggplot(data=uscom_nonulls,aes(x=Age,y=HR))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="",y="Heart Rate (bps)")
+ p_SV <- ggplot(data=uscom_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="",y="Stroke Volume (ml/beat)")
+ p_CO <- ggplot(data=uscom_nonulls,aes(x=Age,y=Cardiac_Output))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="",y="Cardiac Output = HR*SV (L/min")
+ p_MAP <- ggplot(data=uscom_nonulls,aes(x=Age,y=Mean_AP))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="Mean Arterial Pressure (mm.Hg)")
+ p_Ea <- ggplot(data=uscom_nonulls,aes(x=Age,y=Ea))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="Arterial Elastance (mm.Hg/L")
+p_tpr <- ggplot(data=uscom_nonulls,aes(x=Age,y=Ea*80/HR))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="TPR (dynes.sec/cm5)")
+ 
+ grid.arrange(top=sprintf("USCOM cardiac data (n=%d)",dim(uscom_nonulls)[1]),p_HR,p_SV,p_CO,p_MAP,p_Ea,p_tpr,nrow=2)
+
+
+```
+
+Male/Female plots with loess smoothed curves
+
+Loess smoothing is a local regression method in which the fit at a point is dependent on other points in the "neighborhood", weighted by distance from the point. A neighborhood of up to 75% of the data range is used here (this is the default in R). A 95% confidence interval is shown for each line - this is the confidence interval for the mean of each variable, at each age point (it does not encompass 95% of the data)
+
+Reference: W. S. Cleveland, E. Grosse and W. M. Shyu (1992) Local regression models. Chapter 8 of Statistical Models in S eds J.M. Chambers and T.J. Hastie, Wadsworth & Brooks/Cole.
+
+### Smoothed mean lines for whole age range, Male vs Female
+
+```{r cardiac_loess_plots_uscom, fig.height=5.5}
+loess_span=0.75
+ p_MAP <- ggplot(data=uscom_nonulls,aes(x=Age,y=Mean_AP))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Mean Arterial Pressure (mm.Hg)")
+ 
+ p_CO <- ggplot(data=uscom_nonulls,aes(x=Age,y=Cardiac_Output))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="Cardiac Output = HR*SV (L/min)")+
+  theme(legend.position='none')
+ p_TPR <- ggplot(data=uscom_nonulls,aes(x=Age,y=Ea*80/HR))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="TPR (dynes.sec/cm5)")+
+  theme(legend.position='none')
+ p_SV <- ggplot(data=uscom_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+ p_Ea <- ggplot(data=uscom_nonulls,aes(x=Age,y=Ea))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Arterial Elastance (mm.Hg/L)")+
+  theme(legend.position='none')
+ 
+ lay<-rbind(c(1,1,2,3),c(1,1,4,5))
+ grid.arrange(top=sprintf("Mean lines with 95 percent CI shown for males and females age 0 to %d.\n",max(max(uscom_nonulls$Age))),p_MAP,p_CO,p_TPR,p_SV,p_Ea,layout_matrix=lay)
+
+
+```
+
+
+
+Male/Female lines are quite close, so we can calculate effect size of sex for each relevant variable. I have used a t-test to detect p-values and Cohen's d for effect sizes - these tests are appropriate where groups have similar standard deviations.
+
+Cohen's d under 0.2 is considered small, 0.5 is moderate.
+p values over .05 are insufficiently statistically significant
+
+Reference: Cohen, J. (1969). Statistical power analysis for the behavioral sciences (1st ed.). New York, NY: Academic Press.
+
+
+### Effect size and statistical significance of sex differences in cardiac variables (USCOM)
+
+```{r uscom_analysis, echo=FALSE}
+report_effects <- function(data,cmpcol,datcol,cmpval1,cmpval2){
+  xlist <- data[data[,cmpcol]==cmpval1,datcol][[1]]
+  ylist <- data[data[,cmpcol]==cmpval2,datcol][[1]]
+  eff<- (mean(ylist) - mean(xlist))/sqrt((var(xlist)+var(ylist))/2)
+  tt<- t.test(xlist,ylist)$p.value
+  return(sprintf("Testing %s vs %s for %s - effect size %1.2f, p-value %1.2e",cmpval1,cmpval2,datcol,eff,tt))
+}
+uscom_paed <- filter(uscom_nonulls,Age<20)
+uscom_adult <- filter(uscom_nonulls,Age>=20)
+
+print("All Data:")
+for (col in c('HR','TPR','Stroke_Volume','SV_per_kg','Cardiac_Output','CO_per_kg','Mean_AP','Ea')){
+  print(report_effects(uscom_nonulls,'Gender',col,'Male','Female'))
+}
+
+print("Age under 20:")
+for (col in c('HR','TPR','Stroke_Volume','SV_per_kg','Cardiac_Output','CO_per_kg','Mean_AP','Ea')){
+  print(report_effects(uscom_paed,'Gender',col,'Male','Female'))
+}
+
+print("Age 20 and over:")
+for (col in c('HR','TPR','Stroke_Volume','SV_per_kg','Cardiac_Output','CO_per_kg','Mean_AP','Ea')){
+  print(report_effects(uscom_adult,'Gender',col,'Male','Female'))
+}
+
+
+```
+Discussion: Although many of the values are statistically significant, effect sizes of comparing between male and female are very small for the <20 data, and still not large among the adult group. The effect size for stroke volume per kg is much smaller than for total stroke volume, implying that much of the observed difference between the sexes can be explained by the average weight difference between male and female patients
+
+
+### Per-kg graphs - Stroke Volume and Cardiac Output
+
+```{r uscom_per_kg}
+loess_span=0.3
+
+ p_CO <- ggplot(data=uscom_nonulls,aes(x=Age,y=Cardiac_Output/Weight))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="Cardiac Output/kg = HR*SV/Weight (L/min/kg)")+
+  theme(legend.position='none')
+ p_SV <- ggplot(data=uscom_nonulls,aes(x=Age,y=Stroke_Volume/Weight))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="Stroke Volume/kg (ml/beat/kg)")+
+  theme(legend.position='none')
+
+ grid.arrange(top=sprintf("Mean lines with 95 percent CI shown for males and females age 0 to %d (loess smoothing factor %1.1f).\n",max(max(uscom_nonulls$Age)),loess_span),p_CO,p_SV,nrow=1)
+```
+
+Discussion: Looks very flat apart from paediatric data.In this graph I have not had to use a very high value for the smoothing factor - the data is intrinsically quite smooth. We could do a linear regression for adult data to see if the effect of age is significant after reaching adulthood. Empirically I found that if the calculations were done with a cutoff of 20, then Age looks a little significant, but by moving the cutoff a little further forward you can quickly get to the point where age is clearly having no effect. Chose 30, as it's a nice round number
+
+```{r}
+co_lin <- lm((Cardiac_Output/Weight) ~ Age+Gender,data=filter(uscom_nonulls,Age>=30))
+sv_lin <- lm((Cardiac_Output/Weight) ~ Age+Gender,data=filter(uscom_nonulls,Age>=30))
+print("Cardiac Output per kg regression")
+summary(co_lin)$coeff
+print("Stroke Volume per kg regression")
+summary(sv_lin)$coeff
+
+```
+Note: The scientific notation obscures this a little, but the p-value of around 0.65 for age in both these regressions is ridiculously high - it offers absolutely no support for the theory that age is having an effect on CO/kg or SV/kg for ages over 30. Added Gender as a variable just for interest - as in the effect size calculations above it is somewhat statistically significant but given the fairly small effect size for adult data, this may not be clinically relevant.
+
+### Summary Statistics - 10-yr groups for ease of reading
+
+```{r summary_stats, echo=TRUE}
+options(digits=4)
+uscom_nonulls$AgeGroup10 <- cut(uscom_nonulls$Age,breaks=c(seq(0,100,by=10),Inf),right=FALSE)
+table(uscom_nonulls$Gender,uscom_nonulls$AgeGroup10)[,c(1:10)]
+
+
+```
+
+```{r regressions, echo=FALSE}
+#npmodco <- npreg(Cardiac_Output~Age+factor(Gender)+Height+Weight,data=uscom_nonulls,residuals=TRUE)
+#npmodmap <- npreg(Mean_AP~Age,data=uscom_nonulls,residuals=TRUE)
+#npmodea <- npreg(Ea~Age,data=uscom_nonulls,residuals=TRUE)
+#summary(lm(Cardiac_Output~Age+factor(Gender)+Height+Weight,data=uscom_nonulls))
+#summary(lm(Mean_AP~Age+factor(Gender)+Height+Weight,data=uscom_nonulls))
+#summary(lm(Ea~Age+factor(Gender)+Height+Weight,data=uscom_nonulls))
+#plot(npmodco)
+
+
+```
+
+
+```{r echo=FALSE}
+# Add loess information to the data frame (not output)
+loess_span = 0.6
+male_uscom <- uscom_nonulls %>% filter(Gender=="Male") %>% select(Age,Gender,Ea,HR,Cardiac_Output,SVR,Stroke_Volume,HR,AgeGroup,AgeGroup10,WeightGroup10,BMIGroup) 
+male_uscom$svr.loess <- predict(loess(SVR ~ Age, data=male_uscom,span=loess_span))
+male_uscom$sv.loess <- predict(loess(Stroke_Volume ~ Age, data=male_uscom,span=loess_span))
+male_uscom$co.loess <- predict(loess(Cardiac_Output ~ Age, data=male_uscom,span=loess_span))
+male_uscom$ea.loess <- predict(loess(Ea ~ Age, data=male_uscom,span=loess_span))
+male_uscom$hr.loess <- predict(loess(HR ~ Age, data=male_uscom,span=loess_span))
+
+female_uscom <- uscom_nonulls %>% filter(Gender=="Female") %>% select(Age,Gender,Ea,HR,Cardiac_Output,SVR,Stroke_Volume,HR,AgeGroup,AgeGroup10,WeightGroup10,BMIGroup) 
+female_uscom$svr.loess <- predict(loess(SVR ~ Age, data=female_uscom,span=loess_span))
+female_uscom$sv.loess <- predict(loess(Stroke_Volume ~ Age, data=female_uscom,span=loess_span))
+female_uscom$co.loess <- predict(loess(Cardiac_Output ~ Age, data=female_uscom,span=loess_span))
+female_uscom$ea.loess <- predict(loess(Ea ~ Age, data=female_uscom,span=loess_span))
+female_uscom$hr.loess <- predict(loess(HR ~ Age, data=female_uscom,span=loess_span))
+
+svrconvert=80
+eaconvert=1000
+loess_frame <- rbind(male_uscom,female_uscom)
+loess_frame <- loess_frame %>% arrange(desc(Age))
+loess_frame$comb.svr.loess <- predict(loess(SVR ~ Age, data=loess_frame,span=loess_span))
+loess_frame$comb.sv.loess <- predict(loess(Stroke_Volume ~ Age, data=loess_frame,span=loess_span))
+loess_frame$comb.co.loess <- predict(loess(Cardiac_Output ~ Age, data=loess_frame,span=loess_span))
+loess_frame$comb.ea.loess <- predict(loess(Ea ~ Age, data=loess_frame,span=loess_span))
+loess_frame$comb.hr.loess <- predict(loess(HR ~ Age, data=loess_frame,span=loess_span))
+
+
+bar_frame=data.frame(refvals=seq(100,3000,length.out=dim(loess_frame)[1]))
+bar_frame$svrline30=30*svrconvert/bar_frame$refvals
+bar_frame$svrline60=60*svrconvert/bar_frame$refvals
+bar_frame$svrline90=90*svrconvert/bar_frame$refvals
+bar_frame$svrline120=120*svrconvert/bar_frame$refvals
+bar_frame$ealine30=30*eaconvert/bar_frame$refvals
+bar_frame$ealine60=60*eaconvert/bar_frame$refvals
+bar_frame$ealine90=90*eaconvert/bar_frame$refvals
+bar_frame$ealine120=120*eaconvert/bar_frame$refvals
+#extra lines for pressure field graphs
+bar_frame$ealine65=65*eaconvert/bar_frame$refvals
+bar_frame$ealine53=53*eaconvert/bar_frame$refvals
+bar_frame$ealine82=82*eaconvert/bar_frame$refvals
+
+barcolors<-c("#008800","#006600","#004400","#002200")
+twelvecolors<-c("#ff4400","#ff5500","#ff6600","#ff7700","#ff8800","#ff9900","#ffaa00","#ffbb00","#ffcc00","#ffdd00","#ffee00","#ffff00")
+m_dotsize=3
+
+```
+
+
+
+## Trajectory Plots
+
+### Starling model - combined
+
+```{r trajectory1, warning=FALSE, fig.height=6}
+min_svr <- min(loess_frame$comb.svr.loess)
+max_co <- max(loess_frame$comb.co.loess)
+min_svr_age <- mean(loess_frame$Age[loess_frame$comb.svr.loess==min_svr])
+max_co_age <- mean(loess_frame$Age[loess_frame$comb.co.loess==max_co])
+end_svr <- loess_frame$comb.svr.loess[loess_frame$Age==max(loess_frame$Age)]
+end_co <- loess_frame$comb.co.loess[loess_frame$Age==max(loess_frame$Age)]
+refmax<-max(bar_frame$refvals)
+
+ggplot(data=loess_frame)+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(x=comb.svr.loess, y=comb.co.loess),lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr, y = end_co, xend = end_svr*1.01, yend = end_co*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = "#008800")+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = "#002200")+
+  geom_point(data=filter(loess_frame,comb.co.loess==max_co |comb.svr.loess==min_svr), aes(x=comb.svr.loess, y=comb.co.loess,color=(comb.co.loess==max_co)), size=m_dotsize)+ 
+  scale_color_manual(values=c("#ff8800","#ffcc00"), labels = c(sprintf("Minimum SVR estimate (Age %1.0f)",min_svr_age),sprintf("Maximum CO estimate (Age %1.0f)",max_co_age)))+ theme(legend.position = c(0.80, 0.87),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Vascular Resistance",y="Cardiac Output",title="Age trajectory for Starling Model (USCOM), all data")
+```
+
+Notes: I calculated the turnaround point accurately from the data this time, rather than just an eyeball estimate. There are two points there, but they're very close together.
+The USCOM data has both SVR as a data column, and both Ea and HR in order to calculate it as SVR=Ea*80/HR. These values do not match exactly, though they're highly correlated. I am currently using the SVR column for this plot.
+
+### Starling model - separated by sex
+
+```{r trajectory1comb, warning=FALSE, fig.height=6}
+min_svr_f <- min(female_uscom$svr.loess)
+min_svr_m <- min(male_uscom$svr.loess)
+max_co_f <- max(female_uscom$co.loess)
+max_co_m <- max(male_uscom$co.loess)
+min_svr_age_f <- mean(female_uscom$Age[female_uscom$svr.loess==min_svr_f])
+min_svr_age_m <- mean(male_uscom$Age[male_uscom$svr.loess==min_svr_m])
+max_co_age_f <- mean(female_uscom$Age[female_uscom$co.loess==max_co_f])
+max_co_age_m <- mean(male_uscom$Age[male_uscom$co.loess==max_co_m])
+end_svr_f <- female_uscom$svr.loess[female_uscom$Age==max(female_uscom$Age)]
+end_svr_m <- male_uscom$svr.loess[male_uscom$Age==max(male_uscom$Age)]
+end_co_f <- female_uscom$co.loess[female_uscom$Age==max(female_uscom$Age)]
+end_co_m <- male_uscom$co.loess[male_uscom$Age==max(male_uscom$Age)]
+refmax<-max(bar_frame$refvals)
+
+ggplot(data=loess_frame)+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(svr.loess, y=co.loess,color=Gender),lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr_f, y = end_co_f, xend = end_svr_f*1.01, yend = end_co_f*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+  geom_curve(aes(x = end_svr_m, y = end_co_m, xend = end_svr_m*1.01, yend = end_co_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  scale_color_manual(values=m_colors)+ theme(legend.position = c(0.80, 0.87),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Vascular Resistance",y="Cardiac Output",title="Age trajectories for Starling Model (USCOM), male and female")
+```
+Notes: In the age-separated plot I'm not labelling the turnaround points for male and female trajectories since the graph is already quite complex. They are in fact within 0.4year of the combined values above
+
+### Pressure field - combined
+
+```{r trajectory2, warning=FALSE, fig.height=6}
+min_ea <- min(loess_frame$comb.ea.loess)
+max_sv <- max(loess_frame$comb.sv.loess)
+min_ea_age <- mean(loess_frame$Age[loess_frame$comb.ea.loess==min_ea])
+max_sv_age <- mean(loess_frame$Age[loess_frame$comb.sv.loess==max_sv])
+end_ea <- loess_frame$comb.ea.loess[loess_frame$Age==max(loess_frame$Age)]
+end_sv <- loess_frame$comb.sv.loess[loess_frame$Age==max(loess_frame$Age)]
+refmax<-max(bar_frame$refvals)
+
+ggplot(data=loess_frame)+
+  geom_point(aes(x=Ea,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(x=comb.ea.loess, y=comb.sv.loess),lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_ea, y = end_sv, xend = end_ea*1.01, yend = end_sv*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=filter(loess_frame,comb.sv.loess==max_sv |comb.ea.loess==min_ea), aes(x=comb.ea.loess, y=comb.sv.loess,color=(comb.sv.loess==max_sv)), size=m_dotsize)+ 
+  scale_color_manual(values=c("#ff8800","#ffcc00"), labels = c(sprintf("Minimum Ea estimate (Age %1.0f)",min_ea_age),sprintf("Maximum SV estimate (Age %1.0f)",max_sv_age)))+ theme(legend.position = c(0.80, 0.87),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (USCOM), all data")
+
+
+```
+
+Notes: the maximum stroke volume estimate is fairly sensitive to the amount of smoothing here (because it stays close to the top for a number of years), but the turnaround point is clearly still in the late teens.
+
+An alternative for this plot is:
+
+```{r trajectory2b, warning=FALSE, fig.height=6}
+ea_per_age=c()
+sv_per_age=c()
+for (i in c(1:8)){
+  ea_per_age[i]=mean(loess_frame$comb.ea.loess[loess_frame$Age==i*10])
+  sv_per_age[i]=mean(loess_frame$comb.sv.loess[loess_frame$Age==i*10])
+}
+end_ea <- loess_frame$comb.ea.loess[loess_frame$Age==max(loess_frame$Age)]
+end_sv <- loess_frame$comb.sv.loess[loess_frame$Age==max(loess_frame$Age)]
+refmax<-max(bar_frame$refvals)
+
+ggplot(data=loess_frame)+
+  geom_point(aes(x=Ea,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(x=comb.ea.loess, y=comb.sv.loess),lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_ea, y = end_sv, xend = end_ea*1.01, yend = end_sv*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=ea_per_age,y=sv_per_age,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,10,11,12)],name="Age")+ theme(legend.position = c(0.85, 0.65),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (USCOM), all data, with age estimates")
+
+
+```
+
+It would also be possible to use this format for the Starling Equation graph, to show the progression by decade. I think I like this format better than the one where I label the turnaround point (because see flotrac data - this turns around in quite a different spot. Also, labelling of multiple age points gives more information in a way that seems quite intuitive)
+
+### Pressure Field - separated by sex
+
+```{r trajectory2comb, warning=FALSE, fig.height=6, fig.width=8}
+ea_per_age_f=c()
+ea_per_age_m=c()
+sv_per_age_f=c()
+sv_per_age_m=c()
+for (i in c(1:8)){
+  ea_per_age_f[i]=mean(female_uscom$ea.loess[abs(female_uscom$Age-i*10)<0.1])
+  ea_per_age_m[i]=mean(male_uscom$ea.loess[abs(male_uscom$Age-i*10)<0.1])
+  sv_per_age_f[i]=mean(female_uscom$sv.loess[abs(female_uscom$Age-i*10)<0.1])
+  sv_per_age_m[i]=mean(male_uscom$sv.loess[abs(male_uscom$Age-i*10)<0.1])
+}
+end_ea_f <- female_uscom$ea.loess[female_uscom$Age==max(female_uscom$Age)]
+end_ea_m <- male_uscom$ea.loess[male_uscom$Age==max(male_uscom$Age)]
+end_sv_f <- female_uscom$sv.loess[female_uscom$Age==max(female_uscom$Age)]
+end_sv_m <- male_uscom$sv.loess[male_uscom$Age==max(male_uscom$Age)]
+refmax<-max(bar_frame$refvals)
+
+ggplot(data=loess_frame)+
+  geom_point(aes(x=Ea,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(ea.loess, y=sv.loess,color=Gender),lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_ea_f, y = end_sv_f, xend = end_ea_f*1.01, yend = end_sv_f*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+  geom_curve(aes(x = end_ea_m, y = end_sv_m, xend = end_ea_m*1.01, yend = end_sv_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=ea_per_age_f,y=sv_per_age_f,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21, size=m_dotsize)+ 
+  geom_point(data=data.frame(x=ea_per_age_m,y=sv_per_age_m,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  scale_color_manual(values=m_colors)+ theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,10,11,12)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (USCOM), male and female, with age estimates")
+```
+
+### Pressure Field Migration Plots
+
+```{r pressfield, warning=FALSE, fig.height=6}
+refmax<-max(bar_frame$refvals)
+
+ggplot(data=filter(loess_frame,(AgeGroup %in% c("[0,5)","[10,15)","[20,25)","[40,45)","[60,65)","[80,85)"))))+
+  geom_point(aes(x=Ea,y=Stroke_Volume))+
+  facet_wrap(~AgeGroup)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine65),color="red",lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine90),color="red",lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax+100))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+   annotate("text", label = "30 mm Hg", x = refmax-100, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax-100, y = 50, size = 2, colour = barcolors[4])+
+   annotate("text", label = "65 mm Hg", x = refmax-100, y = 28, size = 2, colour = "red")+
+   annotate("text", label = "90 mm Hg", x = refmax-100, y = 40, size = 2, colour = "red")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  #scale_fill_manual(values=twelvecolors[c(1,4,7,10)],name="BMI")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Pressure Field migration with age (USCOM) in selected age groups")
+
+```
+Notes: Picked out a representative subset of the data across the USCOM age range, so as to pinpoint the ages at which noticeable movement occurs in the location of the points. Comparing to 65/90 targets, because this is the USCOM data so not taking account of CVP yet. I experimented with adding weight/BMI info to this too, but it doesn't seem to be very informative in this case
+
+
+
+
+# Flotrac data
+
+Actual data for significant cardiac variables, as uscom above.Reporting E instead of Ea and SVR instead of TPR this time
+
+```{r flotrac_plots, fig.height=7.5}
+#FLOTRAC elastance is not Ea it is Es
+#redo with Es=Ea-CVP/SV
+#Remember to use Es not Ea for all flotrac-related graphs
+
+ p_HR <- ggplot(data=flotrac_nonulls,aes(x=Age,y=HR))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="",y="Heart Rate (bps)")
+ p_SV <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="",y="Stroke Volume (ml/beat)")
+ p_CO <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Cardiac_Output))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="",y="Cardiac Output = HR*SV (L/min)")
+ p_MAP <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Mean_AP))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="MAP (mm.Hg)")
+ p_Es <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Es))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="Systemic Elastance (mm.Hg/L)")
+p_SVR <- ggplot(data=flotrac_nonulls,aes(x=Age,y=SVR))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="SVR (dynes.sec/cm5)")
+p_CVP <- ggplot(data=flotrac_nonulls,aes(x=Age,y=CVP))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="CVP (mm.Hg)")
+ 
+ grid.arrange(top=sprintf("Flotrac cardiac data (n=%d)",dim(flotrac_nonulls)[1]),p_HR,p_SV,p_CO,p_MAP,p_Es,p_SVR,p_CVP,nrow=3)
+
+```
+
+### Smoothed mean lines for whole age range, Male vs Female
+
+```{r cardiac_loess_plots_flotrac, fig.height=5}
+
+loess_span=0.75
+ p_MAP <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Mean_AP-CVP))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+ 
+   geom_smooth(aes(colour=Gender,fill=Gender,y=CVP),alpha=0.2,method="loess",span=loess_span,formula=y~x,level=0,lty="dotted")+ 
+   expand_limits(y=0)+
+   annotate("text", label = "(CVP)", x = 100, y = 20, size = 3,color="#888888")+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="MAP-CVP (mm.Hg)")
+ 
+ p_CO <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Cardiac_Output))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="Cardiac Output = HR*SV (L/min)")+
+  theme(legend.position='none')
+ p_SVR <- ggplot(data=flotrac_nonulls,aes(x=Age,y=SVR))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="SVR (dynes.sec/cm5)")+
+  theme(legend.position='none')
+ p_SV <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+ p_Es <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Es))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+  
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="",y="Arterial Elastance (mm.Hg/L)")+
+  theme(legend.position='none')
+ 
+ lay<-rbind(c(1,1,2,3),c(1,1,4,5))
+ grid.arrange(top=sprintf("Mean lines with 95 percent CI shown for males and females age %d to %d.\n",min(flotrac_withnulls$Age,na.rm=T),max(flotrac_withnulls$Age,na.rm=T)),p_MAP,p_CO,p_SVR,p_SV,p_Es,layout_matrix=lay)
+
+
+```
+
+
+### Effect size and statistical significance of sex differences in cardiac variables (Flotrac)
+
+```{r flotrac_analysis,echo=FALSE}
+print("All Data:")
+for (col in c('HR','SVR','Stroke_Volume','SV_per_kg','Cardiac_Output','CO_per_kg','Mean_AP','Ea','Es','CVP','Age','PulsePressure')){
+  print(report_effects(flotrac_nonulls,'Gender',col,'Male','Female'))
+}
+
+
+
+```
+Discussion: Unlike in the uscom data set, there is significant difference between male and female in all the above cardiac variables, mostly with large effect sizes. However, there's also a moderate difference between the age of the male and female groups in the flotrac data - this may influence comparisons between the two groups. See summary statistics below.
+Note: In this data I calculated Ea via Ea=Es+CVP/SV (Es is the 'Elastance' column in the original sheet). The fact that their statistics are identical suggests to me that CVP/SV was used in the original data sheet to calculate Elastance in the first place, so the transformation back to Ea does not give us any further insights.
+
+## Flotrac Summary Statistics - 10-yr groups for ease of reading
+
+```{r summary_stats_f, echo=TRUE}
+options(digits=4)
+flotrac_nonulls$AgeGroup <- cut(flotrac_nonulls$Age,breaks=c(seq(30,110,by=10),Inf),right=FALSE)
+table(flotrac_nonulls$Gender,flotrac_nonulls$AgeGroup)[,c(1:8)]
+
+print(sprintf("Mean Female Age - %1.1f",mean(filter(flotrac_nonulls,Gender=='Female')$Age)))
+print(sprintf("Mean Male Age - %1.1f",mean(filter(flotrac_nonulls,Gender=='Male')$Age)))
+
+print(sprintf("Mean Female Age uscom>40 - %1.1f",mean(filter(uscom_nonulls,Gender=='Female' & Age>=40)$Age)))
+print(sprintf("Mean Male Age  uscom>40 - %1.1f",mean(filter(uscom_nonulls,Gender=='Male' & Age >=40)$Age)))
+
+```
+
+
+
+```{r echo=FALSE}
+# Add loess information to the data frame (not output)
+loess_span = 0.7
+male_flotrac <- flotrac_nonulls %>% filter(Gender=="Male") %>% select(Age,Gender,Es,HR,Cardiac_Output,SVR,Stroke_Volume,HR,AgeGroup,AgeGroup10,WeightGroup10,BMIGroup) 
+male_flotrac$svr.loess <- predict(loess(SVR ~ Age, data=male_flotrac,span=loess_span))
+male_flotrac$sv.loess <- predict(loess(Stroke_Volume ~ Age, data=male_flotrac,span=loess_span))
+male_flotrac$co.loess <- predict(loess(Cardiac_Output ~ Age, data=male_flotrac,span=loess_span))
+male_flotrac$es.loess <- predict(loess(Es ~ Age, data=male_flotrac,span=loess_span))
+male_flotrac$hr.loess <- predict(loess(HR ~ Age, data=male_flotrac,span=loess_span))
+
+female_flotrac <- flotrac_nonulls %>% filter(Gender=="Female") %>% select(Age,Gender,Es,HR,Cardiac_Output,SVR,Stroke_Volume,HR,AgeGroup,AgeGroup10,WeightGroup10,BMIGroup) 
+female_flotrac$svr.loess <- predict(loess(SVR ~ Age, data=female_flotrac,span=loess_span))
+female_flotrac$sv.loess <- predict(loess(Stroke_Volume ~ Age, data=female_flotrac,span=loess_span))
+female_flotrac$co.loess <- predict(loess(Cardiac_Output ~ Age, data=female_flotrac,span=loess_span))
+female_flotrac$es.loess <- predict(loess(Es ~ Age, data=female_flotrac,span=loess_span))
+female_flotrac$hr.loess <- predict(loess(HR ~ Age, data=female_flotrac,span=loess_span))
+
+svrconvert=80
+esconvert=1000
+loess_f_frame <- rbind(male_flotrac,female_flotrac)
+loess_f_frame <- loess_f_frame %>% arrange(desc(Age))
+loess_f_frame$comb.svr.loess <- predict(loess(SVR ~ Age, data=loess_f_frame,span=loess_span))
+loess_f_frame$comb.sv.loess <- predict(loess(Stroke_Volume ~ Age, data=loess_f_frame,span=loess_span))
+loess_f_frame$comb.co.loess <- predict(loess(Cardiac_Output ~ Age, data=loess_f_frame,span=loess_span))
+loess_f_frame$comb.es.loess <- predict(loess(Es ~ Age, data=loess_f_frame,span=loess_span))
+loess_f_frame$comb.hr.loess <- predict(loess(HR ~ Age, data=loess_f_frame,span=loess_span))
+
+
+bar_f_frame=data.frame(refvals=seq(100,3000,length.out=dim(loess_f_frame)[1]))
+bar_f_frame$svrline30=30*svrconvert/bar_f_frame$refvals
+bar_f_frame$svrline60=60*svrconvert/bar_f_frame$refvals
+bar_f_frame$svrline90=90*svrconvert/bar_f_frame$refvals
+bar_f_frame$svrline120=120*svrconvert/bar_f_frame$refvals
+bar_f_frame$esline30=30*esconvert/bar_f_frame$refvals
+bar_f_frame$esline60=60*esconvert/bar_f_frame$refvals
+bar_f_frame$esline90=90*esconvert/bar_f_frame$refvals
+bar_f_frame$esline120=120*esconvert/bar_f_frame$refvals
+#extra lines for pressure field graphs
+bar_f_frame$esline65=65*esconvert/bar_f_frame$refvals
+bar_f_frame$esline53=53*esconvert/bar_f_frame$refvals
+bar_f_frame$esline82=82*esconvert/bar_f_frame$refvals
+
+barcolors<-c("#008800","#006600","#004400","#002200")
+twelvecolors<-c("#ff4400","#ff5500","#ff6600","#ff7700","#ff8800","#ff9900","#ffaa00","#ffbb00","#ffcc00","#ffdd00","#ffee00","#ffff00")
+
+```
+
+
+
+## Trajectory Plots
+
+### Starling model - combined
+
+```{r trajectory1_f, warning=FALSE, fig.height=6}
+min_svr <- min(loess_f_frame$comb.svr.loess)
+max_co <- max(loess_f_frame$comb.co.loess)
+min_svr_age <- mean(loess_f_frame$Age[loess_f_frame$comb.svr.loess==min_svr])
+max_co_age <- mean(loess_f_frame$Age[loess_f_frame$comb.co.loess==max_co])
+end_svr <- loess_f_frame$comb.svr.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+end_co <- loess_f_frame$comb.co.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+ggplot(data=loess_f_frame)+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.005,alpha=0.05)+
+  geom_path(aes(x=comb.svr.loess, y=comb.co.loess),lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2,alpha=0.5)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr, y = end_co, xend = end_svr*1.005, yend = end_co*0.98),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = "#008800")+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = "#002200")+
+  geom_point(data=filter(loess_frame,comb.co.loess==max_co |comb.svr.loess==min_svr), aes(x=comb.svr.loess, y=comb.co.loess,color=(comb.co.loess==max_co)), size=1)+ 
+  scale_color_manual(values=c("#ff8800","#ffcc00"), labels = c(sprintf("Minimum SVR estimate (Age %1.0f)",min_svr_age),sprintf("Maximum CO estimate (Age %1.0f)",max_co_age)))+ theme(legend.position = c(0.80, 0.87),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Vascular Resistance",y="Cardiac Output",title="Age trajectory for Starling Model (flotrac), from age 40")
+```
+
+Notes: 
+
+### Starling model - separated by sex
+
+```{r trajectory1comb_f, warning=FALSE, fig.height=6}
+min_svr_f <- min(female_flotrac$svr.loess)
+min_svr_m <- min(male_flotrac$svr.loess)
+max_co_f <- max(female_flotrac$co.loess)
+max_co_m <- max(male_flotrac$co.loess)
+min_svr_age_f <- mean(female_flotrac$Age[female_flotrac$svr.loess==min_svr_f])
+min_svr_age_m <- mean(male_flotrac$Age[male_flotrac$svr.loess==min_svr_m])
+max_co_age_f <- mean(female_flotrac$Age[female_flotrac$co.loess==max_co_f])
+max_co_age_m <- mean(male_flotrac$Age[male_flotrac$co.loess==max_co_m])
+end_svr_f <- female_flotrac$svr.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_svr_m <- male_flotrac$svr.loess[male_flotrac$Age==max(male_flotrac$Age)]
+end_co_f <- female_flotrac$co.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_co_m <- male_flotrac$co.loess[male_flotrac$Age==max(male_flotrac$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+ggplot(data=loess_f_frame)+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.005,alpha=0.05)+
+  geom_path(aes(svr.loess, y=co.loess,color=Gender),lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2,alpha=0.5)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr_f, y = end_co_f, xend = end_svr_f*0.992, yend = end_co_f*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+  geom_curve(aes(x = end_svr_m, y = end_co_m, xend = end_svr_m*1.005, yend = end_co_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  scale_color_manual(values=m_colors)+ theme(legend.position = c(0.80, 0.87),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Vascular Resistance",y="Cardiac Output",title="Age trajectories for Starling Model (flotrac), male and female")
+```
+Notes: The turnaround in the female graph at the end is odd, but there is very little data in the high age range, and this graph does not show confidence intervals
+
+### Pressure field - combined
+
+```{r trajectory2_f, warning=FALSE, fig.height=6}
+min_es <- min(loess_f_frame$comb.es.loess)
+max_sv <- max(loess_f_frame$comb.sv.loess)
+min_es_age <- mean(loess_f_frame$Age[loess_f_frame$comb.es.loess==min_es])
+max_sv_age <- mean(loess_f_frame$Age[loess_f_frame$comb.sv.loess==max_sv])
+end_es <- loess_f_frame$comb.es.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+end_sv <- loess_f_frame$comb.sv.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+ggplot(data=loess_f_frame)+
+  geom_point(aes(x=Es,y=Stroke_Volume),size=0.005,alpha=0.05)+
+  geom_path(aes(x=comb.es.loess, y=comb.sv.loess),lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_es, y = end_sv, xend = end_es*1.01, yend = end_sv*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=filter(loess_f_frame,comb.sv.loess==max_sv |comb.es.loess==min_es), aes(x=comb.es.loess, y=comb.sv.loess,color=(comb.sv.loess==max_sv)), size=m_dotsize)+ 
+  scale_color_manual(values=c("#ff8800","#ffcc00"), labels = c(sprintf("Minimum Es estimate (Age %1.0f)",min_es_age),sprintf("Maximum SV estimate (Age %1.0f)",max_sv_age)))+ theme(legend.position = c(0.80, 0.87),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (flotrac), all data")
+
+
+```
+
+Notes: The turnaround is at a very high age here, but there are only 7 data points under 50 in this data so, as before, there is a possibility of influential outliers
+
+An alternative for this plot is:
+
+```{r trajectory2b_f, warning=FALSE, fig.height=6}
+es_per_age=c()
+sv_per_age=c()
+for (i in c(4:9)){
+  es_per_age[i-3]=mean(loess_f_frame$comb.es.loess[abs(loess_f_frame$Age-i*10)<1])
+  sv_per_age[i-3]=mean(loess_f_frame$comb.sv.loess[abs(loess_f_frame$Age-i*10)<1])
+}
+end_es <- loess_f_frame$comb.es.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+end_sv <- loess_f_frame$comb.sv.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+ggplot(data=loess_f_frame)+
+  geom_point(aes(x=Es,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(x=comb.es.loess, y=comb.sv.loess),lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_es, y = end_sv, xend = end_es*1.01, yend = end_sv*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=es_per_age,y=sv_per_age,c=factor(c(40,50,60,70,80,90))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,11)],name="Age")+ theme(legend.position = c(0.85, 0.65),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (flotrac), all data, with age estimates")
+
+
+```
+Notes: Two of the age markers on this graph are clearly on top of each other - I think 50 and 60
+
+### Pressure Field - separated by sex
+
+```{r trajectory2comb_f, warning=FALSE, fig.height=6}
+es_per_age_f=c()
+es_per_age_m=c()
+sv_per_age_f=c()
+sv_per_age_m=c()
+for (i in c(4:9)){
+  es_per_age_f[i-3]=mean(female_flotrac$es.loess[abs(female_flotrac$Age-i*10)<0.1])
+  es_per_age_m[i-3]=mean(male_flotrac$es.loess[abs(male_flotrac$Age-i*10)<0.1])
+  sv_per_age_f[i-3]=mean(female_flotrac$sv.loess[abs(female_flotrac$Age-i*10)<0.1])
+  sv_per_age_m[i-3]=mean(male_flotrac$sv.loess[abs(male_flotrac$Age-i*10)<0.1])
+}
+end_es_f <- female_flotrac$es.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_es_m <- male_flotrac$es.loess[male_flotrac$Age==max(male_flotrac$Age)]
+end_sv_f <- female_flotrac$sv.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_sv_m <- male_flotrac$sv.loess[male_flotrac$Age==max(male_flotrac$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+ggplot(data=loess_f_frame)+
+  geom_point(aes(x=Es,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(es.loess, y=sv.loess,color=Gender),lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_es_f, y = end_sv_f, xend = end_es_f*1.001, yend = end_sv_f*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+  geom_curve(aes(x = end_es_m, y = end_sv_m, xend = end_es_m*1.01, yend = end_sv_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=es_per_age_f,y=sv_per_age_f,c=factor(10*c(4:9))), aes(x=x, y=y,fill=c), shape=21, size=m_dotsize)+ 
+  geom_point(data=data.frame(x=es_per_age_m,y=sv_per_age_m,c=factor(10*c(4:9))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  scale_color_manual(values=m_colors)+ theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,11)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (flotrac), male and female, with age estimates")
+```
+
+## Pressure Field Migration Plots
+
+```{r pressfield_f, warning=FALSE, fig.height=8}
+refmax<-max(bar_f_frame$refvals)
+
+ggplot(data=filter(loess_f_frame,(AgeGroup %in% c("[50,60)","[60,70)","[70,80)","[80,90)"))))+
+  geom_point(aes(x=Es,y=Stroke_Volume))+
+  facet_wrap(~AgeGroup)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline30),color=barcolors[1],lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline53),color="red",lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline82),color="red",lwd=0.2,alpha=0.5)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline120),color=barcolors[4],lwd=0.2,alpha=0.5)+
+  scale_x_continuous(limits = c(0, refmax+100))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+   annotate("text", label = "30 mm Hg", x = refmax-100, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax-100, y = 50, size = 2, colour = barcolors[4])+
+   annotate("text", label = "53 mm Hg", x = refmax-100, y = 28, size = 2, colour = "red")+
+   annotate("text", label = "82 mm Hg", x = refmax-100, y = 40, size = 2, colour = "red")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  #scale_fill_manual(values=twelvecolors[c(1,4,7,10)],name="BMI")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Pressure Field migration with age (flotrac) in selected age groups")
+
+```
+Notes: 
+
+
+
+## USCOM and Flotrac data comparisons
+
+```{r cardiac_plots_combined_f, fig.height=8}
+
+m_cmp_colors= c("#ff8800","#008822")
+loess_span=0.5
+ p_MAP <- ggplot(data=combined,aes(x=Age,y=Mean_AP))+
+   geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors)+  labs(colour="",x="Age",y="Mean Arterial Pressure (mm.Hg)")+
+  theme(legend.position='none')
+ p_CO <- ggplot(data=combined,aes(x=Age,y=Cardiac_Output))+
+   geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors)+  
+   labs(colour="",x="Age",y="Cardiac Output/kg")+
+  theme(legend.position='none')
+ p_SV <- ggplot(data=combined,aes(x=Age,y=Stroke_Volume))+
+     geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  
+   labs(colour="",x="Age",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+ p_MAPk <- ggplot(data=combined,aes(x=Age,y=Mean_AP/Weight))+
+   geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors)+  labs(colour="",x="Age",y="Mean Arterial Pressure/kg")+
+  theme(legend.position='none')
+ p_COk <- ggplot(data=combined,aes(x=Age,y=CO_per_kg))+
+   geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors)+  
+   labs(colour="",x="Age",y="Cardiac Output = HR*SV/kg")+
+  theme(legend.position='none')
+ p_SVk <- ggplot(data=combined,aes(x=Age,y=SV_per_kg))+
+     geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  
+   labs(colour="",x="Age",y="Stroke Volume/kg")+
+  theme(legend.position='none')
+ p_h <- ggplot(data=combined,aes(x=Age,y=Height))+
+     geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+ scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  
+   labs(colour="",x="Age",y="Height (cm)")+
+  theme(legend.position='none')
+ p_w <- ggplot(data=combined,aes(x=Age,y=Weight))+
+     geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+ scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  
+   labs(colour="",x="Age",y="Weight (kg)")+
+   theme(legend.position = c(1.45, 0.8))
+ 
+ grid.arrange(top="Comparable USCOM/Flotrac data, Age>40",p_MAP,p_CO,p_SV,p_MAPk,p_COk,p_SVk,p_h,p_w,nrow=3)
+
+
+```
+Notes: The Flotrac data is showing some quite different patterns to the USCOM data. Whereas SV/kg and CO/kg remained fairly constant over this age range in USCOM, they really don't in Flotrac. Is there any possible clinical explanation for this?
+Note - MAP/kg in this graph set is mostly there so that the other per-kg graphs line up nicely
+
+
+                                       
+                                       
+
+# Comparison between cardiac failure and no cardiac failure patients (flotrac)
+
+```{r}
+flotrac_nonulls$Cfailure.f <- flotrac_nonulls$Cfailure==1
+ba <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=Age,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+bb <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=BMI,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+bc <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=Cardiac_Output,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+bd <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=Stroke_Volume,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+be <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=HR,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+bf <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=Mean_AP,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+bg <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=CVP,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+bh <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=Es,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+bi <- ggplot(data=flotrac_nonulls)+geom_boxplot(aes(y=PulsePressure,fill=Cfailure.f))+scale_fill_manual(values=c('black','red'))
+
+grid.arrange(ba,bb,bc,bd,be,bf,bg,bh,bi,nrow=3)
+```
+```{r}
+for (col in c('Age','BMI','HR','Stroke_Volume','SV_per_kg','Cardiac_Output','CO_per_kg','Mean_AP','CVP','Es','PulsePressure')){
+  print(report_effects(flotrac_nonulls,'Cfailure.f',col,F,T))
+}
+```
+Discussion: In this data there were moderate to large effect size differences between heart failure and no heart failure patients in age, SV,CO per kg, MAP, CVP and pulse pressure - all of these had some statistical significance
+
+### CVP regression and plotted distributions
+
+Excluded one outlier with CVP=58 in the regression - over twice the next highest value
+```{r cvpreg, echo=F}
+print("CVP summary")
+summary(flotrac_nonulls$CVP)
+print("Simple regression")
+cvpl <- lm(CVP~Mean_AP+Age+Gender+Weight,data=flotrac_nonulls[-c(28),])
+summary(cvpl)
+print("Per-kg regression")
+cvpl <- lm(CVP/Weight~Mean_AP+Age+Gender,data=flotrac_nonulls[-c(28),])
+summary(cvpl)
+
+```
+
+Discussion: Median CVP is 8 (close to the mean). Simple linear regression against age,weight, gender and MAP shows weight and MAP as being significant. This model's estimate of the CVP difference between weight 40k and 150kg (near the spread of weights in the data) is 0.06240 * (150-40) = 6.86, and the estimated difference between MAP 65 and 165 is 0.03915 * (165-65)=3.9. This is compared to a data-spread (excluding the outlier) of -3 to 26 (note: negative values for CVP seem odd!) Linear regression of CVP/kg against Mean_AP, Age and Gender shows very small dependency on MAP and Age. This is also shown in comparative plots below (outlier included):
+
+```{r}
+ p_age <- ggplot(data=flotrac_nonulls,aes(x=Age,y=CVP/Weight))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="Age",y="CVP/kg")
+ p_map <- ggplot(data=flotrac_nonulls,aes(x=Mean_AP,y=CVP/Weight))+
+   geom_point(size=m_size,alpha=m_alpha, color=m_dot_color)+
+  labs(colour="",x="MAP",y="CVP/kg")
+ 
+ 
+ grid.arrange(p_age,p_map,nrow=1)
+```
+
+# More graphs 10/6
+
+## USCOM
+
+### 1. Large graph of age (X) vs Weight in kg (Y) for both genders
+
+```{r extras_1, fig.height=4}
+
+loess_span=0.75
+ ggplot(data=uscom_nonulls,aes(x=Age,y=Weight))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Weight")
+ 
+
+```
+
+### 2. Resize the USCOM graphs for MAP (both sexes), SV (both sexes), SV per kg (both sexes) and Ea (both sexes) to make a grid of 4 
+a.i. MAP (both sexes)		ii. SV  (both sexes)
+iii. SV per kg (both sexes)	iv. Ea (both sexes)
+
+```{r extras_2, fig.height=5.5}
+
+loess_span=0.75
+ p_MAP <- ggplot(data=uscom_nonulls,aes(x=Age,y=Mean_AP))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Mean Arterial Pressure (mm.Hg)")+
+  theme(legend.position = c(0.75, 0.25),legend.background = element_rect(fill="#eeeeee88"))
+
+ p_SV <- ggplot(data=uscom_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=F)+  labs(colour="",x="Age",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+ 
+  p_SVk <- ggplot(data=uscom_nonulls,aes(x=Age,y=SV_per_kg))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=F)+  labs(colour="",x="Age",y="Stroke Volume/kg")+
+  theme(legend.position='none')
+
+ p_Ea <- ggplot(data=uscom_nonulls,aes(x=Age,y=Ea))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Arterial Elastance (mm.Hg/L)")+
+  theme(legend.position='none')
+ 
+ grid.arrange(top=sprintf("Mean lines with 95 percent CI shown for males and females age 0 to %d.\n",max(max(uscom_nonulls$Age))),p_MAP,p_SV,p_SVk,p_Ea,nrow=2)
+
+```
+
+### 3. For the USCOM pressure field data with coloured dots, can you also generate a separate plot for male data and female data (currently together in one plot)
+a.i. Male pressure field	ii. Female pressure field
+
+```{r extras_3, warning=FALSE, fig.height=5.5,fig.width=10}
+ea_per_age_f=c()
+ea_per_age_m=c()
+sv_per_age_f=c()
+sv_per_age_m=c()
+for (i in c(1:8)){
+  ea_per_age_f[i]=mean(female_uscom$ea.loess[abs(female_uscom$Age-i*10)<0.1])
+  ea_per_age_m[i]=mean(male_uscom$ea.loess[abs(male_uscom$Age-i*10)<0.1])
+  sv_per_age_f[i]=mean(female_uscom$sv.loess[abs(female_uscom$Age-i*10)<0.1])
+  sv_per_age_m[i]=mean(male_uscom$sv.loess[abs(male_uscom$Age-i*10)<0.1])
+}
+end_ea_f <- female_uscom$ea.loess[female_uscom$Age==max(female_uscom$Age)]
+end_ea_m <- male_uscom$ea.loess[male_uscom$Age==max(male_uscom$Age)]
+end_sv_f <- female_uscom$sv.loess[female_uscom$Age==max(female_uscom$Age)]
+end_sv_m <- male_uscom$sv.loess[male_uscom$Age==max(male_uscom$Age)]
+refmax<-max(bar_frame$refvals)
+
+mplot<- ggplot(data=filter(loess_frame,Gender=="Male"))+
+  geom_point(aes(x=Ea,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(ea.loess, y=sv.loess),color=m_colors[2],lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_ea_m, y = end_sv_m, xend = end_ea_m*1.01, yend = end_sv_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=ea_per_age_m,y=sv_per_age_m,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,10,11,12)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (USCOM), male")
+
+fplot<- ggplot(data=filter(loess_frame,Gender=="Female"))+
+  geom_point(aes(x=Ea,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(ea.loess, y=sv.loess),color=m_colors[1],lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=ealine120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_ea_f, y = end_sv_f, xend = end_ea_f*1.01, yend = end_sv_f*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=ea_per_age_f,y=sv_per_age_f,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,10,11,12)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (USCOM), female")
+
+grid.arrange(mplot,fplot,nrow=1)
+```
+
+### 4. For the USCOM data, can you also generate another grid of 4 plots with CO (both genders), CO per kg (both genders), HR (both sexes) and SV (both sexes)
+a.i. CO (both sexes)		ii. CO per kg (both sexes)
+iii. HR (both sexes)		iv. SV (both sexes)
+
+```{r extras_4, fig.height=6}
+
+loess_span=0.75
+ p_CO <- ggplot(data=uscom_nonulls,aes(x=Age,y=Cardiac_Output))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Cardiac Output (L/min)")+
+  theme(legend.position = c(0.75, 0.25),legend.background = element_rect(fill="#eeeeee88"))
+ 
+ p_COk <- ggplot(data=uscom_nonulls,aes(x=Age,y=CO_per_kg))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="Cardiac Output/kg")+
+  theme(legend.position='none')
+ 
+ p_HR <- ggplot(data=uscom_nonulls,aes(x=Age,y=HR))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Heart Rate (bpm)")+
+  theme(legend.position='none')
+ 
+ p_SV <- ggplot(data=uscom_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="Age",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+
+
+ 
+ grid.arrange(top=sprintf("Mean lines with 95 percent CI shown for males and females age 0 to %d.\n",max(max(uscom_nonulls$Age))),p_CO,p_COk,p_SV,p_HR,nrow=2)
+
+```
+
+### 5. USCOM: can you do the same trajectory plot for the change through the life cycle in cardiac output? With coloured dots to indicate the decades? (this may not work) . If it does work ,could you combine both sexes, and also separate male from female plots?
+
+```{r extras_5a, warning=FALSE, fig.height=6, fig.width=8}
+svr_per_age=c()
+co_per_age=c()
+for (i in c(1:8)){
+  svr_per_age[i]=mean(loess_frame$comb.svr.loess[loess_frame$Age==i*10])
+  co_per_age[i]=mean(loess_frame$comb.co.loess[loess_frame$Age==i*10])
+}
+end_svr <- loess_frame$comb.svr.loess[loess_frame$Age==max(loess_frame$Age)]
+end_co <- loess_frame$comb.co.loess[loess_frame$Age==max(loess_frame$Age)]
+refmax<-max(bar_frame$refvals)
+
+ggplot(data=loess_frame)+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(x=comb.svr.loess, y=comb.co.loess),lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr, y = end_co, xend = end_svr*1.01, yend = end_co*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = "#008800")+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = "#002200")+
+  geom_point(data=data.frame(x=svr_per_age,y=co_per_age,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,10,11,12)],name="Age")+ theme(legend.position = c(0.85, 0.65),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Vascular Resistance",y="Cardiac Output",title="Age trajectory for Starling Model (USCOM), all data")
+
+
+```
+
+```{r extras_5b, warning=FALSE, , fig.height=5.5,fig.width=10}
+svr_per_age_f=c()
+svr_per_age_m=c()
+co_per_age_f=c()
+co_per_age_m=c()
+for (i in c(1:8)){
+  svr_per_age_f[i]=mean(female_uscom$svr.loess[abs(female_uscom$Age-i*10)<0.1])
+  svr_per_age_m[i]=mean(male_uscom$svr.loess[abs(male_uscom$Age-i*10)<0.1])
+  co_per_age_f[i]=mean(female_uscom$co.loess[abs(female_uscom$Age-i*10)<0.1])
+  co_per_age_m[i]=mean(male_uscom$co.loess[abs(male_uscom$Age-i*10)<0.1])
+}
+end_svr_f <- female_uscom$svr.loess[female_uscom$Age==max(female_uscom$Age)]
+end_svr_m <- male_uscom$svr.loess[male_uscom$Age==max(male_uscom$Age)]
+end_co_f <- female_uscom$co.loess[female_uscom$Age==max(female_uscom$Age)]
+end_co_m <- male_uscom$co.loess[male_uscom$Age==max(male_uscom$Age)]
+refmax<-max(bar_frame$refvals)
+
+mplot<- ggplot(data=filter(loess_frame,Gender=="Male"))+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(svr.loess, y=co.loess),color=m_colors[2],lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr_m, y = end_co_m, xend = end_svr_m*1.01, yend = end_co_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=svr_per_age_m,y=co_per_age_m,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,10,11,12)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for StarlingModel (USCOM), male")
+
+fplot<- ggplot(data=filter(loess_frame,Gender=="Female"))+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(svr.loess, y=co.loess),color=m_colors[1],lwd=1)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr_f, y = end_co_f, xend = end_svr_f*1.01, yend = end_co_f*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=svr_per_age_f,y=co_per_age_f,c=factor(10*c(1:8))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,10,11,12)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for StarlingModel (USCOM), female")
+
+grid.arrange(mplot,fplot,nrow=1)
+```
+
+## Flotrac 
+
+### 6. Large graph of age (X) vs Weight in kg (Y) for both sexes
+a.i. Large graph of weight (kg) vs Age (both sexes)
+
+```{r extras_6, fig.height=4}
+
+loess_span=0.75
+ ggplot(data=flotrac_nonulls,aes(x=Age,y=Weight))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Weight (kg)")
+ 
+
+```
+
+### 7. Resize the Flotrac graphs to make a grid of 4 consisting of: (MAP-CVP) and CVP, SV, SV per kg and Es.
+a.i. (MAP-CVP)		ii. SV
+iii. SV per kg		iv. Es
+
+```{r extras_7, fig.height=5}
+loess_span=0.75
+ p_MAP <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Mean_AP-CVP))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+ 
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="MAP-CVP (mm.Hg)")+
+  theme(legend.position = c(0.75, 0.25),legend.background = element_rect(fill="#eeeeee88"))
+ 
+ p_SV <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+
+ p_SVk <- ggplot(data=flotrac_nonulls,aes(x=Age,y=SV_per_kg))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="",y="Stroke Volume/kg")+
+  theme(legend.position='none')
+
+ p_Es <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Es))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+  
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="",y="Arterial Elastance (mm.Hg/L")+
+  theme(legend.position='none')
+ 
+ grid.arrange(p_MAP,p_SV,p_SVk,p_Es,nrow=2)
+
+
+```
+### 8. For the pressure field, can you create separate graphs for males and females?
+a.i. Male pressure field	ii. Female pressure field
+
+```{r extras_8, warning=FALSE, fig.height=5.5,fig.width=10}
+es_per_age_f=c()
+es_per_age_m=c()
+sv_per_age_f=c()
+sv_per_age_m=c()
+for (i in c(1:9)){
+  es_per_age_f[i]=mean(female_flotrac$es.loess[abs(female_flotrac$Age-i*10)<0.1])
+  es_per_age_m[i]=mean(male_flotrac$es.loess[abs(male_flotrac$Age-i*10)<0.1])
+  sv_per_age_f[i]=mean(female_flotrac$sv.loess[abs(female_flotrac$Age-i*10)<0.1])
+  sv_per_age_m[i]=mean(male_flotrac$sv.loess[abs(male_flotrac$Age-i*10)<0.1])
+}
+end_es_f <- female_flotrac$es.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_es_m <- male_flotrac$es.loess[male_flotrac$Age==max(male_flotrac$Age)]
+end_sv_f <- female_flotrac$sv.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_sv_m <- male_flotrac$sv.loess[male_flotrac$Age==max(male_flotrac$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+mplot<- ggplot(data=filter(loess_f_frame,Gender=="Male"))+
+  geom_point(aes(x=Es,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(es.loess, y=sv.loess),color=m_colors[2],lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_es_m, y = end_sv_m, xend = end_es_m*1.01, yend = end_sv_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=es_per_age_m[c(4:9)],y=sv_per_age_m[c(4:9)],c=factor(10*c(4:9))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,11)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (Flotrac), male")
+
+fplot<- ggplot(data=filter(loess_f_frame,Gender=="Female"))+
+  geom_point(aes(x=Es,y=Stroke_Volume),size=0.01,alpha=0.05)+
+  geom_path(aes(es.loess, y=sv.loess),color=m_colors[1],lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=esline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 160))+ 
+  geom_curve(aes(x = end_es_f, y = end_sv_f, xend = end_es_f*1.01, yend = end_sv_f*0.95),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 15, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 50, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=es_per_age_f[c(4:9)],y=sv_per_age_f[c(4:9)],c=factor(10*c(4:9))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,11)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for Pressure Field (Flotrac), female")
+
+grid.arrange(mplot,fplot,nrow=1)
+```
+### 9. Can you create a flow field for both genders with a line showing the change with age, for both genders, male gender and female gender? (again, this may not work)
+a.i. SV vs HR with CO lines (both genders)
+Male gender				Female gender
+
+```{r extras_9a, warning=FALSE, fig.height=6, fig.width=8}
+svr_per_age=c()
+co_per_age=c()
+for (i in c(1:9)){
+  svr_per_age[i]=mean(loess_f_frame$comb.svr.loess[loess_f_frame$Age==i*10])
+  co_per_age[i]=mean(loess_f_frame$comb.co.loess[loess_f_frame$Age==i*10])
+}
+end_svr <- loess_f_frame$comb.svr.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+end_co <- loess_f_frame$comb.co.loess[loess_f_frame$Age==max(loess_f_frame$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+ggplot(data=loess_f_frame)+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(x=comb.svr.loess, y=comb.co.loess),lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr, y = end_co, xend = end_svr*1.01, yend = end_co*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1)+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = "#008800")+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = "#002200")+
+  geom_point(data=data.frame(x=svr_per_age[c(4:9)],y=co_per_age[c(4:9)],c=factor(10*c(4:9))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,11)],name="Age")+ theme(legend.position = c(0.85, 0.65),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  labs(colour="",x="Systemic Vascular Resistance",y="Cardiac Output",title="Age trajectory for Starling Model (Flotrac), all data")
+
+
+```
+
+```{r extras_5b, warning=FALSE, , fig.height=5.5,fig.width=10}
+svr_per_age_f=c()
+svr_per_age_m=c()
+co_per_age_f=c()
+co_per_age_m=c()
+for (i in c(1:8)){
+  svr_per_age_f[i]=mean(female_flotrac$svr.loess[abs(female_flotrac$Age-i*10)<0.1])
+  svr_per_age_m[i]=mean(male_flotrac$svr.loess[abs(male_flotrac$Age-i*10)<0.1])
+  co_per_age_f[i]=mean(female_flotrac$co.loess[abs(female_flotrac$Age-i*10)<0.1])
+  co_per_age_m[i]=mean(male_flotrac$co.loess[abs(male_flotrac$Age-i*10)<0.1])
+}
+end_svr_f <- female_flotrac$svr.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_svr_m <- male_flotrac$svr.loess[male_flotrac$Age==max(male_flotrac$Age)]
+end_co_f <- female_flotrac$co.loess[female_flotrac$Age==max(female_flotrac$Age)]
+end_co_m <- male_flotrac$co.loess[male_flotrac$Age==max(male_flotrac$Age)]
+refmax<-max(bar_f_frame$refvals)
+
+mplot<- ggplot(data=filter(loess_f_frame,Gender=="Male"))+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(svr.loess, y=co.loess),color=m_colors[2],lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr_m, y = end_co_m, xend = end_svr_m*1.01, yend = end_co_m*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[2])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=svr_per_age_m[c(4:9)],y=co_per_age_m[c(4:9)],c=factor(10*c(4:9))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,11)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for StarlingModel (Flotrac), male")
+
+fplot<- ggplot(data=filter(loess_f_frame,Gender=="Female"))+
+  geom_point(aes(x=SVR,y=Cardiac_Output),size=0.01,alpha=0.05)+
+  geom_path(aes(svr.loess, y=co.loess),color=m_colors[1],lwd=1)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline30),color=barcolors[1],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline60),color=barcolors[2],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline90),color=barcolors[3],lwd=0.2)+
+  geom_path(data=bar_f_frame,aes(x=refvals, y=svrline120),color=barcolors[4],lwd=0.2)+
+  scale_x_continuous(limits = c(0, refmax))+ 
+  scale_y_continuous(limits = c(0, 12))+ 
+  geom_curve(aes(x = end_svr_f, y = end_co_f, xend = end_svr_f*0.95, yend = end_co_f*0.99),curvature=0,arrow = arrow(length = unit(0.03, "npc")),lwd=1,color=m_colors[1])+
+   annotate("text", label = "30 mm Hg", x = refmax, y = 1, size = 2, colour = barcolors[1])+
+   annotate("text", label = "120 mm Hg", x = refmax, y = 3.5, size = 2, colour = barcolors[4])+
+  geom_point(data=data.frame(x=svr_per_age_f[c(4:9)],y=co_per_age_f[c(4:9)],c=factor(10*c(4:9))), aes(x=x, y=y,fill=c), shape=21,size=m_dotsize)+ 
+  theme(legend.position = c(0.90, 0.70),legend.background = element_rect(fill="#eeeeee88"),plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual(values=twelvecolors[c(1,3,5,7,9,11)],name="Age")+
+  labs(colour="",x="Systemic Elastance",y="Stroke Volume",title="Age trajectory for StarlingModel (Flotrac), female")
+
+grid.arrange(mplot,fplot,nrow=1)
+```
+
+### 10. Can you create a grid of 4 graphs showing: CO (both genders), CO per kg (both genders), HR (both genders), SV (both genders)
+a.i. CO				ii. CO per kg
+iii. HR				iv. SV
+
+```{r extras_10, fig.height=5}
+loess_span=0.75
+ p_CO <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Cardiac_Output))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+ 
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="Age",y="Cardiac Output (L/min)")+
+  theme(legend.position = c(0.75, 0.25),legend.background = element_rect(fill="#eeeeee88"))
+ 
+ p_COk <- ggplot(data=flotrac_nonulls,aes(x=Age,y=CO_per_kg))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="",y="Cardiac Output/kg")+
+  theme(legend.position='none')
+
+ p_HR <- ggplot(data=flotrac_nonulls,aes(x=Age,y=HR))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+  
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors,guide=FALSE)+  labs(colour="",x="",y="Heart Rate")+
+  theme(legend.position='none')
+ 
+ p_SV <- ggplot(data=flotrac_nonulls,aes(x=Age,y=Stroke_Volume))+
+   geom_smooth(aes(colour=Gender,fill=Gender),method="loess",span=loess_span,formula=y~x,level=0.95)+
+  scale_colour_manual(values=m_colors)+
+  scale_fill_manual(values=m_colors)+  labs(colour="",x="",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+
+ grid.arrange(p_MAP,p_SV,p_SVk,p_Es,nrow=2)
+
+
+```
+### 11. Can you create a grid of 6 graphs on one page showing (for the Flotrac data)
+i. Starling field		ii. Pressure field
+iii. CO			iv. SV
+v. SVR			vi. Es
+
+
+### Can you make a grid of 4 graphs consisting of
+
+                                          i.    MAP (Uscom,Flotrac)          ii. SV (Uscom,Flotrac)
+
+                                       iii.    SV per kg (Uscom,Flotrac) iv. Ea (Uscom,Flotrac)
+                                       
+```{r extras_12, fig.height=8}
+
+m_cmp_colors= c("#ff8800","#008822")
+loess_span=0.5
+ p_MAP <- ggplot(data=combined,aes(x=Age,y=Mean_AP))+
+   geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  labs(colour="",x="Age",y="Mean Arterial Pressure (mm.Hg)")+
+  theme(legend.position = c(0.85, 0.25),legend.background = element_rect(fill="#eeeeee88"))
+ p_SV <- ggplot(data=combined,aes(x=Age,y=Stroke_Volume))+
+     geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  
+   labs(colour="",x="Age",y="Stroke Volume (ml/beat)")+
+  theme(legend.position='none')
+ p_SVk <- ggplot(data=combined,aes(x=Age,y=SV_per_kg))+
+     geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+   expand_limits(y=0)+
+  scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  
+   labs(colour="",x="Age",y="Stroke Volume/kg")+
+  theme(legend.position='none')
+ p_Ea <- ggplot(data=combined,aes(x=Age,y=Ea))+
+     geom_smooth(aes(colour=set,fill=set),method="loess",span=loess_span,formula=y~x,level=0.95)+
+ scale_colour_manual(values=m_cmp_colors)+
+  scale_fill_manual(values=m_cmp_colors,guide=F)+  
+   labs(colour="",x="Age",y="Ea")+
+  theme(legend.position='none')
+ 
+ grid.arrange(top="Comparable USCOM/Flotrac data, Age>40",p_MAP,p_SV,p_SVk,p_Ea,nrow=2)
+
+
+```
+                                       
